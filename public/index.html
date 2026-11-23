@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#175ca5">
+  <title>SUS+ | Saúde pública em Belo Horizonte</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <button class="brand" data-view="home" aria-label="Voltar à página inicial"><span class="brand-mark">+</span><strong>SUS<span>+</span></strong></button>
+  <nav aria-label="Navegação principal">
+    <button class="nav-link active" data-view="home">Início</button>
+    <button class="nav-link" data-view="citizen">Área do cidadão</button>
+    <button class="nav-link" data-view="manager">Área do gestor</button>
+    <button class="nav-link" data-view="about">Sobre</button>
+  </nav>
+</header>
+<main>
+  <section id="home" class="view active">
+    <div class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">INFORMAÇÃO PÚBLICA · BELO HORIZONTE</span>
+        <h1>Informação clara sobre a saúde pública da cidade</h1>
+        <p>Conheça unidades de saúde, explore dados da rede municipal e consulte informações públicas de forma simples.</p>
+        <div class="hero-actions"><button class="button primary" data-view="citizen">Encontrar uma unidade</button><button class="button outline-light" data-view="manager">Ver painel do gestor</button></div>
+      </div>
+      <div class="health-illustration" aria-hidden="true">
+        <div class="illustration-ring ring-one"></div><div class="illustration-ring ring-two"></div>
+        <div class="hospital-card"><span class="hospital-icon">+</span><div><strong>Rede de saúde</strong><small>Belo Horizonte</small></div></div>
+        <div class="stat-bubble"><strong id="hero-cnes">—</strong><span>unidades cadastradas</span></div>
+      </div>
+    </div>
+
+    <div class="home-access">
+      <article class="access-card citizen-access">
+        <div class="access-icon" aria-hidden="true">⌖</div>
+        <div><span class="eyebrow">PARA A POPULAÇÃO</span><h2>Área do cidadão</h2><p>Encontre unidades de saúde e consulte informações sobre a rede pública de Belo Horizonte.</p><button class="button primary" data-view="citizen">Acessar área do cidadão</button></div>
+      </article>
+      <article class="access-card manager-access">
+        <div class="access-icon" aria-hidden="true">▥</div>
+        <div><span class="eyebrow">PARA ANÁLISE</span><h2>Área do gestor</h2><p>Visualize indicadores e informações organizadas sobre a rede municipal de saúde.</p><button class="button secondary" data-view="manager">Acessar área do gestor</button></div>
+      </article>
+    </div>
+  </section>
+
+  <section id="citizen" class="view">
+    <div class="citizen-shell">
+      <div class="citizen-heading">
+        <button class="back-button" id="citizen-back" type="button">← Voltar</button>
+        <div><span class="eyebrow">ÁREA DO CIDADÃO</span><h1 id="citizen-title">Como podemos ajudar?</h1><p id="citizen-description">Escolha uma opção para começar. Você não precisa conhecer siglas ou nomes técnicos.</p></div>
+      </div>
+      <div id="citizen-breadcrumb" class="breadcrumb" aria-label="Etapas de navegação"></div>
+
+      <div id="citizen-menu" class="citizen-menu">
+        <button class="choice-card" data-citizen-action="units"><span class="choice-icon">＋</span><span><strong>Encontrar uma unidade de saúde</strong><small>Explore unidades por bairro</small></span><b>›</b></button>
+        <button class="choice-card" data-citizen-action="neighborhoods"><span class="choice-icon">⌖</span><span><strong>Consultar unidades por bairro</strong><small>Veja os bairros disponíveis</small></span><b>›</b></button>
+        <button class="choice-card" data-citizen-action="network"><span class="choice-icon">◎</span><span><strong>Conhecer informações sobre a rede</strong><small>Entenda o que está disponível</small></span><b>›</b></button>
+        <button class="choice-card" data-citizen-action="indicators"><span class="choice-icon">◫</span><span><strong>Consultar indicadores públicos</strong><small>Veja indicadores municipais explicados</small></span><b>›</b></button>
+      </div>
+
+      <div id="citizen-content" class="citizen-content hidden" aria-live="polite"></div>
+
+      <div class="simple-search">
+        <button id="toggle-search" class="text-button" type="button">Prefere pesquisar por nome ou endereço?</button>
+        <div id="search-panel" class="search-panel hidden">
+          <label>Pesquisar<input id="q" type="search" placeholder="Nome da unidade, bairro ou endereço"></label>
+          <label>Conjunto<select id="dataset"><option value="">Todos os conjuntos</option></select></label>
+          <button id="search" class="button primary">Buscar</button>
+        </div>
+      </div>
+      <div class="results-head hidden" id="results-head"><h2>Resultados encontrados</h2><span id="count">0</span></div>
+      <div id="results" class="unit-grid" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <section id="manager" class="view">
+    <div class="page-heading"><div><span class="eyebrow">PAINEL ANALÍTICO</span><h1>Visão da rede municipal</h1></div><span class="period-badge">Dados reais disponíveis</span></div>
+    <div class="notice">Cobertura é uma estimativa da fonte, não uma contagem de pessoas efetivamente atendidas. Produção ambulatorial e atenção primária são apresentados separadamente.</div>
+    <div class="kpis"><article><span>Unidades cadastradas</span><strong id="kpi-cnes">—</strong></article><article><span>Períodos de APS</span><strong id="kpi-aps">—</strong></article><article><span>Períodos de ACS</span><strong id="kpi-acs">—</strong></article><article><span>Monitoramento</span><strong id="kpi-monitor">—</strong></article></div>
+    <div class="dashboard-grid">
+      <article class="chart-card"><div class="card-heading"><h2>Cobertura de Agentes Comunitários de Saúde</h2><p>Percentual por período</p></div><div id="acs-chart" class="bar-chart"></div></article>
+      <article class="chart-card"><div class="card-heading"><h2>Capacidade da Atenção Primária</h2><p>Percentual municipal por período</p></div><div id="aps-chart" class="bar-chart"></div></article>
+    </div>
+    <article class="table-card"><div class="card-heading"><h2>Informações sobre atendimentos na Atenção Primária</h2><p>Belo Horizonte · janeiro a setembro de 2026</p></div><div id="sisab-table" class="table-wrap"></div></article>
+    <article class="table-card"><div class="card-heading"><h2>Produção ambulatorial</h2><p>Aprovada · agosto de 2026 · município 310620</p></div><div id="sia-table" class="table-wrap"></div></article>
+    <details class="table-card monitor-card"><summary>Monitoramento administrativo de equipes e unidades</summary><div id="monitor-table" class="table-wrap"></div></details>
+  </section>
+
+  <section id="about" class="view">
+    <div class="page-heading"><div><span class="eyebrow">TRANSPARÊNCIA</span><h1>Sobre estas informações</h1></div></div>
+    <div class="about-grid"><article><h2>Finalidade</h2><p>O SUS+ organiza informações públicas sobre a rede municipal de saúde de Belo Horizonte. É um protótipo acadêmico da UFMG e não substitui os portais oficiais.</p></article><article><h2>Cuidados importantes</h2><p>Os dados não representam prontuário, agendamento ou atendimento individual. Informações pessoais não são exibidas.</p></article></div>
+    <div class="source-list"><article><b>Cadastro de unidades</b><p>Informações cadastrais e localização disponíveis no cadastro público de estabelecimentos.</p></article><article><b>Indicadores municipais</b><p>Dados agregados de cobertura e produção, apresentados separadamente conforme sua fonte.</p></article><article><b>Monitoramento administrativo</b><p>Informações sobre envio de produção. Não representam isoladamente a qualidade do serviço.</p></article></div>
+    <details class="admin-panel"><summary>Área administrativa</summary><div class="admin-grid"><label>Token administrativo<input id="token" type="password"></label><label>Categoria<select id="category"><option>Estabelecimentos de saúde</option><option>Profissionais e vínculos administrativos</option><option>Produção da Atenção Primária</option><option>Indicadores de cobertura da APS</option><option>Indicadores de cobertura de ACS</option><option>Monitoramento administrativo da APS</option><option>Produção ambulatorial</option></select></label><label>Fonte<input id="source" placeholder="Informe a origem oficial"></label><label>Período<input id="period" placeholder="Ex.: Agosto/2026"></label><label>Arquivo<input id="file" type="file" accept=".csv,.xlsx,.xls"></label></div><button id="import" class="button primary">Importar arquivo</button><p id="message" role="status"></p></details>
+  </section>
+</main>
+<script src="app.js"></script>
+</body></html>
