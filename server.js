@@ -75,14 +75,27 @@ function parseFile(file, originalName, requestedCategory, requestedPeriod) {
   if (ext === ".xlsx" || ext === ".xls") {
     const wb = XLSX.readFile(file, { cellDates: false });
     const out = [];
+    const professionalImport = /Profissionais/i.test(requestedCategory);
     for (const sheet of wb.SheetNames) {
+      if (professionalImport && !/ACS/i.test(sheet)) continue;
       let rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "", raw: false }).map(safeRow);
       if (/cobertura/i.test(originalName)) rows = rows.filter(r => r[Object.keys(r)[0]] || r["Comp. CNES"]);
-      if (/equipes-servicos/i.test(originalName)) {
+      if (/equipes-servicos/i.test(originalName) || professionalImport) {
         rows = rows.filter(r => String(r.IBGE || r["Código IBGE"] || "").trim() === "310620");
       }
-      if (sheet !== "ACS") rows = uniqueRows(rows);
-      out.push({ sheet, rows });
+      if (professionalImport) {
+        rows = rows.map(r => ({
+          "Comp. CNES": r["Comp. CNES"] || "",
+          UF: r.UF || "",
+          Municipio: r.Municipio || r["Município"] || "",
+          IBGE: r.IBGE || "",
+          CBO: r.CBO || "",
+          "Status do envio de produção": r["Status do envio de produção"] || "",
+          "Qtde. de competências consecutivas sem envio": r["Qtde. de competências consecutivas sem envio"] || ""
+        })).filter(r => r.CBO || r["Status do envio de produção"]);
+      }
+      if (sheet !== "ACS" || professionalImport) rows = professionalImport ? rows : uniqueRows(rows);
+      out.push({ sheet: professionalImport ? "Profissionais ACS" : sheet, rows });
     }
     return out;
   }
@@ -122,6 +135,7 @@ function inferPeriod(category, source, filename, sheets) {
   if (/cobertura-acs/i.test(filename)) return "JAN/2026 a AGO/2026";
   if (/cobertura-aps/i.test(filename)) return "JAN/2026 a AGO/2026";
   if (/equipes-servicos/i.test(filename)) return "AGO/2026";
+  if (/profissionais-acs/i.test(filename)) return "AGO/2026";
   return "Período não informado no arquivo";
 }
 
@@ -148,7 +162,8 @@ function seedRealFiles() {
     ["Indicadores de cobertura da APS", "SIAPS/e-Gestor", "SIAPS/cobertura-aps-13-11-2026.xlsx", "XLSX"],
     ["Indicadores de cobertura de ACS", "SIAPS/e-Gestor", "SIAPS/cobertura-acs-13-11-2026.xlsx", "XLSX"],
     ["Produção ambulatorial", "SIA/SUS", "SIA\\SUS/sia_cnv_qamg150402191_244_164_157.csv", "CSV"],
-    ["Produção da Atenção Primária", "SISAB", "SISAB/RelatorioSaudeProducao(3).csv", "CSV"]
+    ["Produção da Atenção Primária", "SISAB", "SISAB/RelatorioSaudeProducao(3).csv", "CSV"],
+    ["Profissionais e vínculos administrativos", "SIAPS/e-Gestor", "Tratados/profissionais-acs-bh-ago-2026-tratado.xlsx", "XLSX"]
   ];
   for (const [category, source, relative, type] of seeds) {
     const file = path.join(base, relative);
@@ -203,13 +218,23 @@ app.get("/api/dashboard", (_req, res) => {
   const acs = findCategory("cobertura de ACS");
   const monitor = findCategory("Monitoramento");
   const latest = (list, field) => list.map(r => r.data[field]).filter(Boolean).slice(-8);
+  const professionals = findCategory("Profissionais");
+  const professionalRows = professionals.map(r => r.data);
+  const professionalCount = professionalRows.length;
+  const cboCounts = [...new Map(professionalRows.filter(r => r.CBO).map(r => [r.CBO, professionalRows.filter(x => x.CBO === r.CBO).length])).values()].length
+    ? [...professionalRows.reduce((m,r)=>{if(r.CBO)m.set(r.CBO,(m.get(r.CBO)||0)+1);return m},new Map())].map(([cbo,count])=>({cbo,count}))
+    : [];
+  const statusCounts = [...professionalRows.reduce((m,r)=>{const status=String(r["Status do envio de produção"]||"").trim();if(status)m.set(status,(m.get(status)||0)+1);return m},new Map())].map(([status,count])=>({status,count}));
   res.json({
-    counts: { establishments: cnes.length, sisab: sisab.length, sia: sia.length, aps: aps.length, acs: acs.length, monitor: monitor.length },
+    counts: { establishments: cnes.length, sisab: sisab.length, sia: sia.length, aps: aps.length, acs: acs.length, monitor: monitor.length, professionals: professionalCount },
     acsSeries: acs.map(r => ({ competence: r.data["Comp. CNES"] || "", coverage: r.data["Cobertura ACS"] || "" })).filter(x => x.competence),
     apsSeries: aps.map(r => ({ competence: r.data["Comp. CNES"] || "", capacity: r.data["Qt. capacidade da equipe"] || "" })).filter(x => x.competence),
     sisab: sisab.map(r => r.data),
     sia: sia.map(r => r.data),
-    monitor: monitor.map(r => ({ sheet: r.sheet_name, municipality: r.data.Município || r.data.Municipio || "", status: r.data["Situação do envio de produção"] || r.data["Status do envio de produção"] || "", count: r.data["Qtde. de competências consecutivas sem envio"] || "", cnes: r.data.CNES || "" }))
+    monitor: monitor.map(r => ({ sheet: r.sheet_name, municipality: r.data.Município || r.data.Municipio || "", status: r.data["Situação do envio de produção"] || r.data["Status do envio de produção"] || "", count: r.data["Qtde. de competências consecutivas sem envio"] || "", cnes: r.data.CNES || "" })),
+    professionals: professionalRows,
+    cboCounts,
+    statusCounts
   });
 });
 

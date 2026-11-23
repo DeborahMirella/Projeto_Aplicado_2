@@ -75,16 +75,65 @@
   </section>
 
   <section id="manager" class="view">
-    <div class="page-heading"><div><span class="eyebrow">PAINEL ANALÍTICO</span><h1>Visão da rede municipal</h1></div><span class="period-badge">Dados reais disponíveis</span></div>
-    <div class="notice">Cobertura é uma estimativa da fonte, não uma contagem de pessoas efetivamente atendidas. Produção ambulatorial e atenção primária são apresentados separadamente.</div>
-    <div class="kpis"><article><span>Unidades cadastradas</span><strong id="kpi-cnes">—</strong></article><article><span>Períodos de APS</span><strong id="kpi-aps">—</strong></article><article><span>Períodos de ACS</span><strong id="kpi-acs">—</strong></article><article><span>Monitoramento</span><strong id="kpi-monitor">—</strong></article></div>
-    <div class="dashboard-grid">
-      <article class="chart-card"><div class="card-heading"><h2>Cobertura de Agentes Comunitários de Saúde</h2><p>Percentual por período</p></div><div id="acs-chart" class="bar-chart"></div></article>
-      <article class="chart-card"><div class="card-heading"><h2>Capacidade da Atenção Primária</h2><p>Percentual municipal por período</p></div><div id="aps-chart" class="bar-chart"></div></article>
+    <div class="manager-shell">
+      <div class="page-heading">
+        <div><span class="eyebrow">PAINEL ANALÍTICO</span><h1>Visão da rede municipal</h1><p>Dados públicos consolidados de Belo Horizonte</p></div>
+        <span class="period-badge">Dados reais disponíveis</span>
+      </div>
+
+      <div class="notice"><strong>Leitura dos dados:</strong> cobertura é uma estimativa da fonte; produção, monitoramento e cadastro representam fontes e conceitos distintos.</div>
+
+      <div class="manager-filter-panel" aria-label="Filtros do painel gestor">
+        <div class="manager-filter-heading"><div><span class="eyebrow">FILTROS</span><h2>Refinar o painel</h2></div><span id="active-filter-label" class="active-filter-label">Nenhum filtro ativo</span></div>
+        <div class="manager-filters">
+          <label>Fonte / indicador<select id="manager-source-filter"><option value="">Todas as fontes</option><option value="ACS">Cobertura de ACS</option><option value="APS">Cobertura da APS</option><option value="MONITOR">Monitoramento administrativo</option></select></label>
+          <label>Competência<select id="manager-period-filter"><option value="">Todas as competências</option></select></label>
+          <label>Grupo de monitoramento<select id="manager-monitor-filter"><option value="">Todos os grupos</option><option value="Estabelecimentos">Estabelecimentos</option><option value="Equipes">Equipes</option><option value="ACS">ACS</option></select></label>
+          <div class="manager-filter-actions"><button id="manager-apply" class="button primary" type="button">Aplicar filtros</button><button id="manager-clear" class="button-card" type="button">Limpar filtros</button></div>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <article class="kpi-card"><div class="kpi-icon" aria-hidden="true">＋</div><div><span>Estabelecimentos cadastrados</span><strong id="kpi-cnes">—</strong><small>Cadastro Nacional de Estabelecimentos</small><p>CNES · Rede municipal</p></div></article>
+        <article class="kpi-card"><div class="kpi-icon" aria-hidden="true">◷</div><div><span>Competências de cobertura ACS</span><strong id="kpi-acs">—</strong><small id="kpi-acs-meta">Cobertura municipal · SIAPS/e-Gestor</small><p>Períodos publicados na fonte</p></div></article>
+        <article class="kpi-card"><div class="kpi-icon" aria-hidden="true">◫</div><div><span>Competências de capacidade APS</span><strong id="kpi-aps">—</strong><small id="kpi-aps-meta">Capacidade municipal · SIAPS/e-Gestor</small><p>Períodos publicados na fonte</p></div></article>
+        <article class="kpi-card"><div class="kpi-icon" aria-hidden="true">▥</div><div><span>Registros de monitoramento</span><strong id="kpi-monitor">—</strong><small>SIAPS/e-Gestor · Abrangência nacional</small><p id="kpi-monitor-meta">BH destacado na tabela</p></div></article>
+      </div>
+
+      <div class="dashboard-section-heading"><div><span class="eyebrow">INDICADORES MUNICIPAIS</span><h2>Cobertura e capacidade das equipes</h2></div><span>Informações agregadas</span></div>
+      <div class="dashboard-grid">
+        <article class="chart-card"><div class="card-heading"><div><h2>Cobertura de ACS</h2><p>Evolução percentual por competência</p></div><span class="chart-source">SIAPS/e-Gestor · ACS</span></div><div id="acs-chart" class="line-chart" role="img" aria-label="Gráfico da cobertura de ACS"></div></article>
+        <article class="chart-card"><div class="card-heading"><div><h2>Capacidade da Atenção Primária</h2><p>Evolução percentual por competência</p></div><span class="chart-source">SIAPS/e-Gestor · APS</span></div><div id="aps-chart" class="line-chart" role="img" aria-label="Gráfico da capacidade da APS"></div></article>
+      </div>
+
+      <div class="dashboard-section-heading"><div><span class="eyebrow">ESTABELECIMENTOS</span><h2>Rede e cadastro</h2></div></div>
+      <div class="overview-grid">
+        <article class="overview-card"><div class="overview-icon">＋</div><div><span>Unidades importadas</span><strong id="overview-cnes">—</strong><p>CNES · Belo Horizonte</p></div></article>
+        <article class="overview-card" id="professionals-overview"><div class="overview-icon">◉</div><div><span>Registros profissionais ACS</span><strong id="overview-professionals">—</strong><p>SIAPS/e-Gestor · AGO/2026 · BH</p></div></article>
+      </div>
+
+      <div class="dashboard-section-heading professionals-heading"><div><span class="eyebrow">VÍNCULOS ADMINISTRATIVOS</span><h2>Profissionais da Rede Municipal</h2></div><span>Dados agregados e identificadores removidos</span></div>
+      <div class="manager-filter-panel professionals-filter-panel" aria-label="Filtros de profissionais">
+        <div class="manager-filter-heading"><div><span class="eyebrow">FILTROS</span><h2>Profissionais ACS</h2></div><span id="active-professional-filter" class="active-filter-label">Nenhum filtro ativo</span></div>
+        <div class="manager-filters professionals-filters">
+          <label>CBO<select id="professional-cbo-filter"><option value="">Todos os CBO</option></select></label>
+          <label>Competência<select id="professional-period-filter"><option value="">Todas as competências</option></select></label>
+          <label>Situação<select id="professional-status-filter"><option value="">Todas as situações</option></select></label>
+          <div class="manager-filter-actions"><button id="professional-apply" class="button primary" type="button">Aplicar filtros</button><button id="professional-clear" class="button-card" type="button">Limpar filtros</button></div>
+        </div>
+      </div>
+      <div class="dashboard-grid professionals-grid">
+        <article class="chart-card"><div class="card-heading"><div><h2>Profissionais por CBO</h2><p>Distribuição agregada dos registros ACS</p></div><span class="chart-source">SIAPS/e-Gestor</span></div><div id="professional-cbo-chart" class="bar-chart professional-chart" role="img" aria-label="Distribuição por CBO"></div></article>
+        <article class="chart-card"><div class="card-heading"><div><h2>Situação do envio</h2><p>Quantidade de registros por situação</p></div><span class="chart-source">AGO/2026</span></div><div id="professional-status-chart" class="bar-chart professional-chart" role="img" aria-label="Situação do envio dos profissionais"></div></article>
+      </div>
+      <article class="table-card"><div class="card-heading"><div><h2>Registros profissionais ACS permitidos</h2><p>SIAPS/e-Gestor · Belo Horizonte · AGO/2026 · Sem CNS, CNES, INE ou nome pessoal</p></div><span class="table-source">Fonte segura: SIAPS/e-Gestor</span></div><div id="professionals-table" class="table-wrap"></div></article>
+
+      <article class="table-card"><div class="card-heading"><div><h2>Produção da Atenção Primária</h2><p>SISAB · Belo Horizonte · janeiro a setembro de 2026</p></div><span class="table-source">Fonte: SISAB</span></div><div id="sisab-table" class="table-wrap"></div></article>
+
+      <article class="table-card"><div class="card-heading"><div><h2>Produção ambulatorial</h2><p>SIA/SUS · Belo Horizonte · agosto de 2026 · município 310620</p></div><span class="table-source">Fonte: SIA/SUS</span></div><div id="sia-table" class="table-wrap"></div></article>
+
+      <article class="table-card"><div class="card-heading"><div><h2>Monitoramento administrativo nacional</h2><p>SIAPS/e-Gestor · equipe e estabelecimento · registros de Belo Horizonte destacados</p></div><span class="table-source">170 registros no conjunto</span></div><div id="monitor-table" class="table-wrap"></div></article>
     </div>
-    <article class="table-card"><div class="card-heading"><h2>Informações sobre atendimentos na Atenção Primária</h2><p>Belo Horizonte · janeiro a setembro de 2026</p></div><div id="sisab-table" class="table-wrap"></div></article>
-    <article class="table-card"><div class="card-heading"><h2>Produção ambulatorial</h2><p>Aprovada · agosto de 2026 · município 310620</p></div><div id="sia-table" class="table-wrap"></div></article>
-    <details class="table-card monitor-card"><summary>Monitoramento administrativo de equipes e unidades</summary><div id="monitor-table" class="table-wrap"></div></details>
   </section>
 
   <section id="about" class="view">

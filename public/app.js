@@ -57,9 +57,106 @@ $("toggle-search").addEventListener("click",()=>$("search-panel").classList.togg
 async function search(){const p=new URLSearchParams();if($("dataset").value)p.set("datasetId",$("dataset").value);if($("q").value)p.set("q",$("q").value);p.set("mode","all");try{const r=await fetch("/api/search?"+p),rows=await r.json();$("results-head").classList.remove("hidden");$("count").textContent=rows.length+" encontrados";$("results").innerHTML=rows.length?rows.filter(x=>x.CNES).map(x=>unitCard({name:x["NOME FANTASIA"]||x["RAZAO SOCIAL"]||"",district:x.BAIRRO||"",address:[x.LOGRADOURO,x.NUMERO].filter(Boolean).join(", "),cep:x.CEP||"",lat:x.LATITUDE||"",lon:x.LONGITUDE||"",cnes:x.CNES||""})).join(""):'<p class="empty">Não encontramos unidades com esses dados.</p>';bindDetails()}catch(e){$("results").innerHTML='<p class="empty">Não foi possível realizar a busca.</p>'}}
 $("search").addEventListener("click",search);$("q").addEventListener("keydown",e=>{if(e.key==="Enter")search()});
 
-function barChart(id,series,key,suffix=""){const el=$(id),parsed=series.map(x=>{let raw=String(x[key]??"").replace("%","").trim();let value;if(raw.includes(",")){value=parseFloat(raw.replace(/\./g,"").replace(",","."));}else if(raw.includes(".")){value=parseFloat(raw);}else{value=parseFloat(raw.replace(/[^0-9]/g,""));}return {label:x.competence,value,suffix}}).filter(x=>Number.isFinite(x.value));if(!parsed.length){el.innerHTML='<p class="empty">Não há valores publicados para este indicador.</p>';return}const max=Math.max(...parsed.map(x=>x.value),1);el.innerHTML=parsed.map(x=>`<div class="bar-row"><span>${esc(x.label)}</div><div class="bar-track"><i style="width:${Math.max(3,x.value/max*100)}%"></i></div><strong>${x.value.toLocaleString("pt-BR",{maximumFractionDigits:2})}${x.suffix}</strong></div>`).join("")}
-function table(id,columns,rows,empty="Sem registros"){const el=$(id);if(!rows.length){el.innerHTML=`<p class="empty">${empty}</p>`;return}el.innerHTML=`<table><thead><tr>${columns.map(c=>`<th>${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${columns.map(c=>`<td>${esc(r[c.key]??"")}</td>`).join("")}</tr>`).join("")}</tbody></table>`}
-async function loadDashboard(){try{const d=await(await fetch("/api/dashboard")).json();$("kpi-cnes").textContent=d.counts.establishments.toLocaleString("pt-BR");$("kpi-aps").textContent=d.counts.aps.toLocaleString("pt-BR");$("kpi-acs").textContent=d.counts.acs.toLocaleString("pt-BR");$("kpi-monitor").textContent=d.counts.monitor.toLocaleString("pt-BR");barChart("acs-chart",d.acsSeries.map(x=>({competence:x.competence,value:x.coverage})),"value","%");barChart("aps-chart",d.apsSeries.map(x=>({competence:x.competence,value:x.capacity})),"value","%");table("sisab-table",[{label:"Município",key:"Municipio"},{label:"Atendimento individual",key:"Atendimento Individual"},{label:"Atendimento odontológico",key:"Atendimento Odontológico"},{label:"Procedimento",key:"Procedimento"},{label:"Visita domiciliar",key:"Visita Domiciliar"}],d.sisab);table("sia-table",[{label:"Município",key:"Município"},{label:"Quantidade aprovada",key:"Qtd.aprovada"}],d.sia);table("monitor-table",[{label:"Aba",key:"sheet"},{label:"Município",key:"municipality"},{label:"Situação",key:"status"},{label:"Tempo sem envio",key:"count"}],d.monitor.filter(x=>x.municipality&&/BELO HORIZONTE/i.test(x.municipality)),"Nenhum registro municipal identificado.")}catch(e){document.querySelectorAll(".kpis strong").forEach(x=>x.textContent="—")}}
+function parseManagerNumber(raw,suffix=""){
+ if(raw===null||raw===undefined||String(raw).trim()==="")return null;
+ let text=String(raw).replace(/%/g,"%").trim();
+ let value;
+ if(text.includes(",")){value=parseFloat(text.replace(/[^0-9,-]/g,"").replace("-","-").replace(".","").replace(",","."));}
+ else{value=parseFloat(text.replace(/[^0-9.-]/g,""));}
+ return Number.isFinite(value)?value:null;
+}
+function formatManagerNumber(value,suffix=""){
+ return value===null?"Dado não disponível na fonte":value.toLocaleString("pt-BR",{minimumFractionDigits:suffix?2:0,maximumFractionDigits:suffix?2:2})+suffix;
+}
+function lineChart(id,series,key,title,suffix=""){
+ const el=$(id); if(!el)return;
+ const parsed=series.map((x,i)=>({label:x.competence,value:parseManagerNumber(x[key],suffix),index:i})).filter(x=>x.value!==null);
+ if(!parsed.length){el.innerHTML='<div class="chart-empty"><strong>Dado não disponível na fonte</strong><span>Não há valores publicados para esta série.</span></div>';return}
+ const width=620,height=260,padding={top:24,right:24,bottom:48,left:54};
+ const values=parsed.map(x=>x.value);
+ const spread=Math.max(...values)-Math.min(...values);
+ const min=Math.max(0,Math.min(...values)-Math.max(5,spread*0.25));
+ const max=Math.max(...values)+Math.max(5,spread*0.25);
+ const xPos=i=>padding.left+i*(width-padding.left-padding.right)/Math.max(parsed.length-1,1);
+ const y=v=>padding.top+(max-v)*(height-padding.top-padding.bottom)/(max-min||1);
+ let grid="";
+ for(let i=0;i<=4;i++){const v=min+(max-min)*i/4,yy=y(v);grid+=`<line x1="${padding.left}" y1="${yy}" x2="${width-padding.right}" y2="${yy}" class="chart-grid-line"/><text x="${padding.left-10}" y="${yy+4}" text-anchor="end" class="chart-axis-text">${v.toFixed(v%1?1:0)}${suffix}</text>`}
+ const coords=parsed.map((x,i)=>`${xPos(i)},${y(x.value)}`).join(" ");
+ const pointMarkup=parsed.map((x,i)=>`<g><circle cx="${xPos(i)}" cy="${y(x.value)}" r="5" class="chart-point"><title>${esc(title)} — ${esc(x.label)}: ${formatManagerNumber(x.value,suffix)}</title></circle><text x="${xPos(i)}" y="${height-18}" text-anchor="middle" class="chart-axis-text">${esc(String(x.label).replace(/^20/,""))}</text></g>`).join("");
+ el.innerHTML=`<svg class="manager-line-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img"><g>${grid}</g><polyline points="${coords}" class="chart-line"/>${pointMarkup}</svg><div class="chart-legend"><span></span>${esc(title)} · unidade: percentual</div>`;
+}
+
+const managerTableState=new Map();
+function dataTable(id,columns,rows,options={}){
+ const el=$(id);if(!el)return;
+ const key=id;
+ if(!rows||!rows.length){el.innerHTML='<div class="data-empty"><strong>Nenhum registro encontrado</strong><span>Não há dados disponíveis para esta seleção.</span></div>';return}
+ const state=managerTableState.get(key)||{page:1,pageSize:10,sortKey:"",sortDir:"asc"};
+ let filtered=[...rows];
+ if(state.sortKey){const col=columns.find(c=>c.key===state.sortKey);filtered.sort((a,b)=>{const av=a[state.sortKey]??"",bv=b[state.sortKey]??"";const an=parseManagerNumber(av),bn=parseManagerNumber(bv);let result=an!==null&&bn!==null?an-bn:String(av).localeCompare(String(bv),"pt-BR",{numeric:true});return state.sortDir==="asc"?result:-result})}
+ const total=filtered.length,totalPages=Math.max(1,Math.ceil(total/state.pageSize));state.page=Math.min(state.page,totalPages);managerTableState.set(key,state);
+ const start=(state.page-1)*state.pageSize,pageRows=filtered.slice(start,start+state.pageSize);
+ el.innerHTML=`<div class="table-toolbar"><strong>${total.toLocaleString("pt-BR")} registro${total===1?"":"s"} encontrado${total===1?"":"s"}</strong><label>Exibir<select class="table-page-size"><option value="10" ${state.pageSize===10?"selected":""}>10</option><option value="25" ${state.pageSize===25?"selected":""}>25</option><option value="50" ${state.pageSize===50?"selected":""}>50</option></select> por página</label></div><div class="table-scroll"><table><thead><tr>${columns.map(c=>`<th scope="col" data-sort="${esc(c.key)}" class="${state.sortKey===c.key?`sorted-${state.sortDir}`:""}">${esc(c.label)}<span aria-hidden="true">↕</span></th>`).join("")}</tr></thead><tbody>${pageRows.map((r,rowIndex)=>`<tr>${columns.map(c=>`<td class="${c.numeric?"numeric":""}">${esc(r[c.key]??"")||'<span class="data-unavailable">Não informado</span>'}</td>`).join("")}</tr>`).join("")}</tbody></table></div><div class="table-pagination"><button type="button" data-page="prev" ${state.page<=1?"disabled":""}>‹ Anterior</button><span>Página ${state.page} de ${totalPages}</span><button type="button" data-page="next" ${state.page>=totalPages?"disabled":""}>Próxima ›</button></div>`;
+ el.querySelector(".table-page-size").addEventListener("change",e=>{state.page=1;state.pageSize=Number(e.target.value);managerTableState.set(key,state);dataTable(id,columns,rows,options)});
+ el.querySelectorAll("th[data-sort]").forEach(th=>th.addEventListener("click",()=>{const sortKey=th.dataset.sort;state.sortDir=state.sortKey===sortKey&&state.sortDir==="asc"?"desc":"asc";state.sortKey=sortKey;state.page=1;managerTableState.set(key,state);dataTable(id,columns,rows,options)}));
+ el.querySelector("[data-page=prev]").addEventListener("click",()=>{state.page=Math.max(1,state.page-1);managerTableState.set(key,state);dataTable(id,columns,rows,options)});
+ el.querySelector("[data-page=next]").addEventListener("click",()=>{state.page=Math.min(totalPages,state.page+1);managerTableState.set(key,state);dataTable(id,columns,rows,options)});
+}
+
+let dashboardData=null;
+async function loadDashboard(){
+ try{
+  const d=await(await fetch("/api/dashboard")).json();dashboardData=d;
+  $("kpi-cnes").textContent=d.counts.establishments.toLocaleString("pt-BR");
+  $("kpi-aps").textContent=d.counts.aps.toLocaleString("pt-BR");
+  $("kpi-acs").textContent=d.counts.acs.toLocaleString("pt-BR");
+  $("kpi-monitor").textContent=d.counts.monitor.toLocaleString("pt-BR");
+  $("overview-cnes").textContent=d.counts.establishments.toLocaleString("pt-BR");
+  $("kpi-monitor-meta").textContent=`Nacional · ${d.monitor.filter(x=>/BELO HORIZONTE/i.test(x.municipality||"")).length} registro(s) de BH`;
+  const periods=[...new Set([...d.acsSeries.map(x=>x.competence),...d.apsSeries.map(x=>x.competence)].filter(Boolean))].sort();
+  $("manager-period-filter").innerHTML='<option value="">Todas as competências</option>'+periods.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  $("overview-professionals").textContent=(d.counts.professionals||0).toLocaleString("pt-BR");
+  const professionals=d.professionals||[];
+  const cbos=[...new Set(professionals.map(r=>r.CBO).filter(Boolean))].sort();
+  const professionalPeriods=[...new Set(professionals.map(r=>r["Comp. CNES"]).filter(Boolean))].sort();
+  const professionalStatuses=[...new Set(professionals.map(r=>r["Status do envio de produção"]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+  $("professional-cbo-filter").innerHTML='<option value="">Todos os CBO</option>'+cbos.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  $("professional-period-filter").innerHTML='<option value="">Todas as competências</option>'+professionalPeriods.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  $("professional-status-filter").innerHTML='<option value="">Todas as situações</option>'+professionalStatuses.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  applyProfessionalFilters();
+ }catch(e){
+  document.querySelectorAll(".kpi-card strong,.overview-card strong").forEach(x=>{if(!x.id||x.id!=="overview-cnes")x.textContent="Dado não disponível na fonte"});
+ }
+}
+function applyManagerFilters(){
+ if(!dashboardData)return;
+ const d=dashboardData;
+ const source=$("manager-source-filter").value;
+ const period=$("manager-period-filter").value;
+ const monitorGroup=$("manager-monitor-filter").value;
+ const normalizeCompetence=value=>{const text=String(value||"").trim();const slash=text.match(/^([0-9]{1,2})\/([0-9]{4})$/);if(slash)return `${slash[2]}${slash[1].padStart(2,"0")}`;const compact=text.match(/^([0-9]{4})([0-9]{2})$/);return compact?value.replace(/[^0-9]/g,""):text.replace(/[^0-9]/g,"")};
+ const acs=d.acsSeries.filter(x=>!period||normalizeCompetence(x.competence)==normalizeCompetence(period));
+ const aps=d.apsSeries.filter(x=>!period||normalizeCompetence(x.competence)==normalizeCompetence(period));
+ lineChart("acs-chart",source&&source!=="ACS"&&source!=="MONITOR"?[]:acs,"coverage","Cobertura dos Agentes Comunitários de Saúde","%");
+ lineChart("aps-chart",source&&source!=="APS"&&source!=="MONITOR"?[]:aps,"capacity","Capacidade da Atenção Primária","%");
+ dataTable("sisab-table",[
+  {label:"Município",key:"Municipio"},{label:"Atendimento individual",key:"Atendimento Individual",numeric:true},{label:"Atendimento odontológico",key:"Atendimento Odontológico",numeric:true},{label:"Procedimento",key:"Procedimento",numeric:true},{label:"Visita domiciliar",key:"Visita Domiciliar",numeric:true}
+ ],d.sisab);
+ dataTable("sia-table",[
+  {label:"Município",key:"Município"},{label:"Quantidade aprovada",key:"Qtd.aprovada",numeric:true}
+ ],d.sia);
+ let monitor=d.monitor;
+ if(monitorGroup)monitor=monitor.filter(x=>x.sheet===monitorGroup);
+ managerTableState.delete("monitor-table");
+ dataTable("monitor-table",[
+  {label:"Aba",key:"sheet"},{label:"Município",key:"municipality"},{label:"Situação",key:"status"},{label:"Tempo sem envio",key:"count"},{label:"CNES",key:"cnes",numeric:true}
+ ],monitor);
+ const active=[source?$("manager-source-filter").selectedOptions[0].text:"",period?`Competência ${period}`:"",monitorGroup?`Grupo ${monitorGroup}`:""].filter(Boolean);
+ $("active-filter-label").textContent=active.length?active.join(" · "):"Nenhum filtro ativo";
+ $("active-filter-label").classList.toggle("active",active.length>0);
+}
+$("manager-apply").addEventListener("click",applyManagerFilters);
+$("manager-clear").addEventListener("click",()=>{$("manager-source-filter").value="";$("manager-period-filter").value="";$("manager-monitor-filter").value="";applyManagerFilters()});
 
 $("import").addEventListener("click",async()=>{const file=$("file").files[0];if(!file){$("message").textContent="Selecione um arquivo.";return}const fd=new FormData();fd.append("file",file);fd.append("category",$("category").value);fd.append("source",$("source").value);fd.append("period",$("period").value);$("message").textContent="Importando...";try{const r=await fetch("/api/import",{method:"POST",headers:{"x-admin-token":$("token").value},body:fd});const data=await r.json();$("message").textContent=r.ok?`${data.message} ${data.rows} linhas em ${data.sheets} aba(s).`:data.error;await loadDatasets();await loadDashboard()}catch(e){$("message").textContent="Não foi possível concluir a importação."}});
 
@@ -197,3 +294,31 @@ function initCitizenMap(units=[]){
   setTimeout(()=>citizenMapInstance&&citizenMapInstance.invalidateSize(),50);
  }).catch(()=>{if(status)status.textContent="O mapa externo está temporariamente indisponível."});
 }
+
+function professionalHorizontalChart(id,items,labelKey,valueKey,title){
+ const el=$(id);if(!el)return;
+ if(!items||!items.length){el.innerHTML='<div class="data-empty"><strong>Nenhum registro encontrado</strong><span>Não há dados profissionais para esta seleção.</span></div>';return}
+ const sorted=[...items].sort((a,b)=>Number(b[valueKey]||0)-Number(a[valueKey]||0));
+ const max=Math.max(...sorted.map(x=>Number(x[valueKey]||0)),1);
+ el.innerHTML=`<div class="horizontal-chart" aria-label="${esc(title)}">${sorted.map(x=>`<div class="horizontal-row"><span title="${esc(x[labelKey])}">${esc(x[labelKey])}</span><div class="horizontal-track"><i style="width:${Math.max(3,Number(x[valueKey])/max*100)}%"></i></div><strong>${Number(x[valueKey]).toLocaleString("pt-BR")}</strong></div>`).join("")}</div>`;
+}
+function applyProfessionalFilters(){
+ if(!dashboardData)return;
+ const rows=dashboardData.professionals||[];
+ const cbo=$("professional-cbo-filter").value;
+ const period=$("professional-period-filter").value;
+ const status=$("professional-status-filter").value;
+ const filtered=rows.filter(r=>(!cbo||r.CBO===cbo)&&(!period||r["Comp. CNES"]===period)&&(!status||r["Status do envio de produção"]===status));
+ const cboMap=new Map(),statusMap=new Map();
+ filtered.forEach(r=>{if(r.CBO)cboMap.set(r.CBO,(cboMap.get(r.CBO)||0)+1);const s=r["Status do envio de produção"]||"";if(s)statusMap.set(s,(statusMap.get(s)||0)+1)});
+ professionalHorizontalChart("professional-cbo-chart",[...cboMap].map(([cbo,count])=>({cbo,count})),"cbo","count","Profissionais por CBO");
+ professionalHorizontalChart("professional-status-chart",[...statusMap].map(([status,count])=>({status,count})),"status","count","Situação do envio");
+ dataTable("professionals-table",[
+  {label:"Competência",key:"Comp. CNES"},{label:"Município",key:"Municipio"},{label:"CBO",key:"CBO"},{label:"Situação do envio",key:"Status do envio de produção"},{label:"Competências sem envio",key:"Qtde. de competências consecutivas sem envio"}
+ ],filtered);
+ const active=[cbo?`CBO ${cbo}`:"",period?`Competência ${period}`:"",status?status:""].filter(Boolean);
+ $("active-professional-filter").textContent=active.length?active.join(" · "):"Nenhum filtro ativo";
+ $("active-professional-filter").classList.toggle("active",active.length>0);
+}
+$("professional-apply").addEventListener("click",applyProfessionalFilters);
+$("professional-clear").addEventListener("click",()=>{$("professional-cbo-filter").value="";$("professional-period-filter").value="";$("professional-status-filter").value="";applyProfessionalFilters()});
