@@ -5,6 +5,7 @@ const XLSX = require("xlsx");
 const { parse } = require("csv-parse/sync");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
 const databasePath = path.resolve(process.env.SUSMAIS_DB_PATH || path.join(__dirname, "susmais.sqlite"));
@@ -19,9 +20,6 @@ if (setupMode) {
   }
   db = new Database(databasePath, { fileMustExist: true });
 }
-const uploadDirectory = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, "uploads"));
-fs.mkdirSync(uploadDirectory, { recursive: true });
-const upload = multer({ dest: uploadDirectory, limits: { fileSize: 30 * 1024 * 1024 } });
 const adminToken = String(process.env.ADMIN_TOKEN || "").trim();
 if (!adminToken) {
   console.error("ADMIN_TOKEN não configurado; importações administrativas estão desativadas, inclusive em produção.");
@@ -43,6 +41,118 @@ if (db) {
   }
   console.log(`Banco SQLite carregado: ${databasePath}`);
 }
+
+const uploadDirectory = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, "uploads"));
+function assertWritableDirectory(directory) {
+  fs.accessSync(directory, fs.constants.W_OK | fs.constants.X_OK);
+  const probePath = path.join(directory, `.susmais-write-check-${process.pid}-${Date.now()}`);
+  let descriptor;
+  try {
+    descriptor = fs.openSync(probePath, "wx", 0o600);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    fs.unlinkSync(probePath);
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch (_) {}
+    }
+    try { fs.unlinkSync(probePath); } catch (_) {}
+    throw error;
+  }
+}
+
+function prepareUploadDirectory(directory) {
+  const renderDiskPath = path.resolve("/var/data");
+  const relativeToRenderDisk = path.relative(renderDiskPath, directory);
+  const usesRenderDisk = relativeToRenderDisk === "" ||
+    (!relativeToRenderDisk.startsWith(`..${path.sep}`) && relativeToRenderDisk !== ".." && !path.isAbsolute(relativeToRenderDisk));
+
+  let directoryStats;
+  try {
+    directoryStats = fs.statSync(directory);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (directoryStats) {
+    if (!directoryStats.isDirectory()) {
+      throw new Error(`${directory} existe, mas não é um diretório`);
+    }
+    try {
+      assertWritableDirectory(directory);
+    } catch (error) {
+      throw new Error(`${directory} não está disponível para gravação: ${error.message}`);
+    }
+    return;
+  }
+
+  if (usesRenderDisk) {
+    let renderDiskStats;
+    try {
+      renderDiskStats = fs.statSync(renderDiskPath);
+    } catch (_) {
+      throw new Error(`o disco persistente do Render não está montado em ${renderDiskPath}; ele não será criado automaticamente`);
+    }
+    if (!renderDiskStats.isDirectory()) {
+      throw new Error(`${renderDiskPath} existe, mas não é um diretório de montagem`);
+    }
+  }
+
+  const parentDirectory = path.dirname(directory);
+  let parentStats;
+  try {
+    parentStats = fs.statSync(parentDirectory);
+  } catch (_) {
+    throw new Error(`o diretório pai ${parentDirectory} não está disponível; nenhum diretório pai será criado automaticamente`);
+  }
+  if (!parentStats.isDirectory()) {
+    throw new Error(`o diretório pai ${parentDirectory} não é um diretório`);
+  }
+  try { assertWritableDirectory(parentDirectory); }
+  catch (_) { throw new Error(`o diretório pai ${parentDirectory} não permite criar ${directory}`); }
+
+  try {
+    fs.mkdirSync(directory);
+  } catch (mkdirError) {
+    throw new Error(`não foi possível criar ${directory}: ${mkdirError.message}`);
+  }
+
+  try {
+    assertWritableDirectory(directory);
+  } catch (error) {
+    throw new Error(`${directory} não está disponível para gravação: ${error.message}`);
+  }
+}
+
+if (setupMode) {
+  console.log(`UPLOAD_DIR não será criado nem validado durante a preparação: ${uploadDirectory}`);
+} else {
+  try {
+    prepareUploadDirectory(uploadDirectory);
+  } catch (error) {
+    throw new Error(`UPLOAD_DIR inválido (${uploadDirectory}): ${error.message}. Verifique a montagem e as permissões do armazenamento persistente.`);
+  }
+}
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      // This callback runs only after the import route's setup and token guards.
+      // Keep the setup check here too so this path is never inspected in setup mode.
+      if (setupMode || !db) {
+        return callback(new Error(setupMessage));
+      }
+      try {
+        prepareUploadDirectory(uploadDirectory);
+        callback(null, uploadDirectory);
+      } catch (error) {
+        callback(new Error(`UPLOAD_DIR inválido (${uploadDirectory}): ${error.message}`));
+      }
+    },
+    filename: (_req, _file, callback) => {
+      callback(null, crypto.randomBytes(16).toString("hex"));
+    }
+  }),
+  limits: { fileSize: 30 * 1024 * 1024 }
+});
 
 function requireDatabase(_req, res, next) {
   if (setupMode || !db) {

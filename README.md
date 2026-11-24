@@ -43,7 +43,7 @@ O banco local padrão é `susmais.sqlite` nesta pasta. `SUSMAIS_DB_PATH` pode ap
 
 `SUSMAIS_SETUP_MODE=true` permite iniciar a interface antes de o arquivo SQLite ser transferido. A página mostra o estado de preparação, as APIs de dados e a importação retornam HTTP 503 e nenhum banco é aberto ou criado. Desative com `SUSMAIS_SETUP_MODE=false` após copiar um banco válido para `SUSMAIS_DB_PATH`; fora do modo de preparação, arquivo ausente, inválido ou vazio continua impedindo a inicialização.
 
-`UPLOAD_DIR` define onde os arquivos enviados são armazenados temporariamente. Por padrão, usa `uploads/` nesta pasta, criada automaticamente. Os arquivos temporários são removidos depois da importação.
+`UPLOAD_DIR` define onde os arquivos enviados são armazenados temporariamente. Por padrão, usa `uploads/` nesta pasta. Fora do modo de preparação, o servidor verifica a disponibilidade e a gravação no diretório pai antes de criar apenas a pasta final; não cria diretórios pais. Em modo de preparação, não verifica nem cria `UPLOAD_DIR`. Os arquivos temporários são removidos depois da importação.
 
 Importações administrativas exigem `ADMIN_TOKEN` em qualquer ambiente. Sem a variável, a rota `/api/import` fica desativada; não há token padrão. Antes de uma importação, o servidor cria um backup do SQLite ao lado do banco. Garanta espaço e permissão de escrita nesse diretório.
 
