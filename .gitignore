@@ -1,7 +1,9 @@
 node_modules/
 .env
 .env.*
-*.sqlite
+*.sqlite*
 *.sqlite-journal
-*.db
+*.db*
+uploads/
+/Base de Dados/
 .DS_Store

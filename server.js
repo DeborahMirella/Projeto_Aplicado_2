@@ -7,26 +7,49 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const db = new Database("susmais.sqlite");
-const upload = multer({ dest: "uploads/", limits: { fileSize: 30 * 1024 * 1024 } });
+const databasePath = path.resolve(process.env.SUSMAIS_DB_PATH || path.join(__dirname, "susmais.sqlite"));
+const setupMode = String(process.env.SUSMAIS_SETUP_MODE || "").trim().toLowerCase() === "true";
+const setupMessage = "Sistema em preparação: o banco de dados ainda não foi disponibilizado. Transfira o SQLite para o caminho configurado e reinicie o serviço com SUSMAIS_SETUP_MODE=false.";
+let db = null;
+if (setupMode) {
+  console.log(`SUS+ em modo de preparação. ${setupMessage}`);
+} else {
+  if (!fs.existsSync(databasePath)) {
+    throw new Error(`Banco SQLite não encontrado em ${databasePath}. Configure SUSMAIS_DB_PATH para um banco existente; um banco vazio não será criado.`);
+  }
+  db = new Database(databasePath, { fileMustExist: true });
+}
+const uploadDirectory = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, "uploads"));
+fs.mkdirSync(uploadDirectory, { recursive: true });
+const upload = multer({ dest: uploadDirectory, limits: { fileSize: 30 * 1024 * 1024 } });
+const adminToken = String(process.env.ADMIN_TOKEN || "").trim();
+if (!adminToken) {
+  console.error("ADMIN_TOKEN não configurado; importações administrativas estão desativadas, inclusive em produção.");
+}
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS datasets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, source TEXT NOT NULL,
-  filename TEXT NOT NULL, sheet_name TEXT, reference_period TEXT,
-  extracted_at TEXT DEFAULT CURRENT_TIMESTAMP, row_count INTEGER DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-  row_data TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_records_dataset ON records(dataset_id);
-`);
+if (db) {
+  const requiredTables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+  if (!requiredTables.has("datasets") || !requiredTables.has("records")) {
+    db.close();
+    throw new Error(`O arquivo em ${databasePath} não contém as tabelas datasets e records esperadas.`);
+  }
+  const datasetCount = db.prepare("SELECT COUNT(*) AS count FROM datasets").get().count;
+  const recordCount = db.prepare("SELECT COUNT(*) AS count FROM records").get().count;
+  if (datasetCount === 0 || recordCount === 0) {
+    db.close();
+    throw new Error(`O banco em ${databasePath} não contém conjuntos e registros. Inicialização interrompida para evitar servir um banco vazio.`);
+  }
+  console.log(`Banco SQLite carregado: ${databasePath}`);
+}
 
-// SQLite has not accepted NOT NOT NULL if the table is new in this branch.
-try { db.exec("ALTER TABLE datasets ADD COLUMN imported_once INTEGER DEFAULT 0"); } catch (_) {}
+function requireDatabase(_req, res, next) {
+  if (setupMode || !db) {
+    return res.status(503).json({ error: setupMessage, setup: true });
+  }
+  next();
+}
 
 function norm(v) {
   return String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, " ");
@@ -154,37 +177,11 @@ function importDataset(file, originalName, category, source, period) {
   return { sheets: sheets.length, rows: sheets.reduce((n, s) => n + s.rows.length, 0) };
 }
 
-function seedRealFiles() {
-  const base = path.join(__dirname, "..", "Base de Dados");
-  const seeds = [
-    ["Estabelecimentos de saúde", "CNES", "CNES/estabelecimentos-310620.csv", "CSV"],
-    ["Monitoramento administrativo da APS", "SIAPS/e-Gestor", "Secretária de Saúde Belo Horizonte/equipes-servicos-sujeitos-suspensao.xlsx", "XLSX"],
-    ["Indicadores de cobertura da APS", "SIAPS/e-Gestor", "SIAPS/cobertura-aps-13-11-2026.xlsx", "XLSX"],
-    ["Indicadores de cobertura de ACS", "SIAPS/e-Gestor", "SIAPS/cobertura-acs-13-11-2026.xlsx", "XLSX"],
-    ["Produção ambulatorial", "SIA/SUS", "SIA\\SUS/sia_cnv_qamg150402191_244_164_157.csv", "CSV"],
-    ["Produção da Atenção Primária", "SISAB", "SISAB/RelatorioSaudeProducao(3).csv", "CSV"],
-    ["Profissionais e vínculos administrativos", "SIAPS/e-Gestor", "Tratados/profissionais-acs-bh-ago-2026-tratado.xlsx", "XLSX"]
-  ];
-  for (const [category, source, relative, type] of seeds) {
-    const file = path.join(base, relative);
-    if (!fs.existsSync(file)) continue;
-    const exists = db.prepare("SELECT id FROM datasets WHERE filename=? LIMIT 1").get(path.basename(file));
-    if (exists) continue;
-    try {
-      const result = importDataset(file, path.basename(file), category, source, "");
-      console.log(`Importado: ${path.basename(file)} — ${result.rows} registros efetivos`);
-    } catch (error) {
-      console.error(`Falha ao importar ${path.basename(file)}: ${error.message}`);
-    }
-  }
-}
-seedRealFiles();
-
-app.get("/api/datasets", (_req, res) => {
+app.get("/api/datasets", requireDatabase, (_req, res) => {
   res.json(db.prepare("SELECT id,category,source,filename,sheet_name,reference_period,extracted_at,row_count FROM datasets ORDER BY id DESC").all());
 });
 
-app.get("/api/search", (req, res) => {
+app.get("/api/search", requireDatabase, (req, res) => {
   const datasetId = Number(req.query.datasetId || 0);
   const q = norm(req.query.q || "");
   const mode = req.query.mode === "any" ? "any" : "all";
@@ -207,7 +204,7 @@ app.get("/api/search", (req, res) => {
   res.json(matched.slice(0, 200).map(rec => ({ id: rec.id, ...JSON.parse(rec.row_data), _categoria: rec.category, _fonte: rec.source, _arquivo: rec.filename, _aba: rec.sheet_name, _periodo: rec.reference_period })));
 });
 
-app.get("/api/dashboard", (_req, res) => {
+app.get("/api/dashboard", requireDatabase, (_req, res) => {
   const all = db.prepare(`SELECT d.category,d.source,d.filename,d.sheet_name,d.reference_period,r.row_data FROM records r JOIN datasets d ON d.id=r.dataset_id`).all();
   const rows = all.map(x => ({ ...x, data: JSON.parse(x.row_data) }));
   const findCategory = prefix => rows.filter(r => r.category.includes(prefix));
@@ -238,12 +235,30 @@ app.get("/api/dashboard", (_req, res) => {
   });
 });
 
-app.post("/api/import", upload.single("file"), (req, res) => {
+function createImportBackupPath() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const directory = path.dirname(databasePath);
+  const basename = path.basename(databasePath, path.extname(databasePath));
+  return path.join(directory, `${basename}.before-import-${timestamp}.sqlite`);
+}
+
+app.post("/api/import", (req, res, next) => {
+  if (setupMode || !db) {
+    return res.status(503).json({ error: setupMessage, setup: true });
+  }
+  if (!adminToken) {
+    return res.status(503).json({ error: "Importação desativada: configure ADMIN_TOKEN no ambiente do servidor." });
+  }
+  if (req.headers["x-admin-token"] !== adminToken) {
+    return res.status(401).json({ error: "Token administrativo inválido." });
+  }
+  next();
+}, upload.single("file"), async (req, res) => {
   try {
-    if (!req.headers["x-admin-token"] || req.headers["x-admin-token"] !== (process.env.ADMIN_TOKEN || "troque-este-token")) {
-      return res.status(401).json({ error: "Token administrativo inválido." });
-    }
     if (!req.file) return res.status(400).json({ error: "Selecione um arquivo." });
+    const backupPath = createImportBackupPath();
+    await db.backup(backupPath);
+    console.log(`Backup de segurança criado antes da importação: ${backupPath}`);
     const result = importDataset(req.file.path, req.file.originalname, String(req.body.category || "Não categorizado"), String(req.body.source || "Fonte não informada"), String(req.body.period || ""));
     fs.unlinkSync(req.file.path);
     res.json({ message: "Importação concluída.", ...result });
@@ -253,8 +268,13 @@ app.post("/api/import", upload.single("file"), (req, res) => {
   }
 });
 
-app.get("/api/health", (_req, res) => res.json({ status: "ok", database: "SQLite" }));
-app.get("/api/citizen/units", (req, res) => {
+app.get("/api/health", (_req, res) => {
+  if (setupMode || !db) {
+    return res.json({ status: "setup", setup: true, database: "not_loaded", message: setupMessage });
+  }
+  res.json({ status: "ok", setup: false, database: "SQLite" });
+});
+app.get("/api/citizen/units", requireDatabase, (req, res) => {
   const district = norm(req.query.district || "");
   const unitType = norm(req.query.type || "");
   const service = norm(req.query.service || "");
@@ -317,4 +337,4 @@ app.get("/api/citizen/units", (req, res) => {
   res.json({ districts, types, services, units, warning: "Os tipos e serviços são identificados por termos presentes no cadastro nominal. Isso não confirma todos os serviços efetivamente oferecidos pela unidade." });
 });
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`SUS+ disponível em http://localhost:${port}`));
+app.listen(port, "0.0.0.0", () => console.log(`SUS+ disponível na porta ${port} (0.0.0.0)`));

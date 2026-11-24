@@ -160,7 +160,23 @@ $("manager-clear").addEventListener("click",()=>{$("manager-source-filter").valu
 
 $("import").addEventListener("click",async()=>{const file=$("file").files[0];if(!file){$("message").textContent="Selecione um arquivo.";return}const fd=new FormData();fd.append("file",file);fd.append("category",$("category").value);fd.append("source",$("source").value);fd.append("period",$("period").value);$("message").textContent="Importando...";try{const r=await fetch("/api/import",{method:"POST",headers:{"x-admin-token":$("token").value},body:fd});const data=await r.json();$("message").textContent=r.ok?`${data.message} ${data.rows} linhas em ${data.sheets} aba(s).`:data.error;await loadDatasets();await loadDashboard()}catch(e){$("message").textContent="Não foi possível concluir a importação."}});
 
-loadDatasets();loadDashboard();
+async function initializeService(){
+ try{
+  const response=await fetch("/api/health");
+  const health=await response.json();
+  if(health.setup){
+   const notice=$("setup-notice");
+   notice.querySelector("span").textContent=health.message;
+   notice.hidden=false;
+   document.body.classList.add("setup-mode");
+   document.querySelectorAll('[data-view="citizen"],[data-view="manager"],[data-citizen-action],#toggle-search,#search,#import').forEach(button=>{button.disabled=true;button.title="Disponível após a instalação do banco SQLite."});
+   return;
+  }
+ }catch(_){ }
+ loadDatasets();
+ loadDashboard();
+}
+initializeService();
 async function renderFilteredUnits(){
  $("citizen-menu").classList.add("hidden");
  $("citizen-content").classList.remove("hidden");
