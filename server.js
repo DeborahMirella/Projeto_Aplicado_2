@@ -1,46 +1,26 @@
 const express = require("express");
 const multer = require("multer");
 const Database = require("better-sqlite3");
+const { openConfiguredDatabase } = require("./database-client");
 const XLSX = require("xlsx");
 const { parse } = require("csv-parse/sync");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 
 const app = express();
 const databasePath = path.resolve(process.env.SUSMAIS_DB_PATH || path.join(__dirname, "susmais.sqlite"));
 const setupMode = String(process.env.SUSMAIS_SETUP_MODE || "").trim().toLowerCase() === "true";
-const setupMessage = "Sistema em preparação: o banco de dados ainda não foi disponibilizado. Transfira o SQLite para o caminho configurado e reinicie o serviço com SUSMAIS_SETUP_MODE=false.";
+const setupMessage = "Sistema em preparação: configure o banco de dados e reinicie o serviço com SUSMAIS_SETUP_MODE=false.";
 let db = null;
-if (setupMode) {
-  console.log(`SUS+ em modo de preparação. ${setupMessage}`);
-} else {
-  if (!fs.existsSync(databasePath)) {
-    throw new Error(`Banco SQLite não encontrado em ${databasePath}. Configure SUSMAIS_DB_PATH para um banco existente; um banco vazio não será criado.`);
-  }
-  db = new Database(databasePath, { fileMustExist: true });
-}
+let databaseBackend = null;
 const adminToken = String(process.env.ADMIN_TOKEN || "").trim();
 if (!adminToken) {
   console.error("ADMIN_TOKEN não configurado; importações administrativas estão desativadas, inclusive em produção.");
 }
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
-
-if (db) {
-  const requiredTables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
-  if (!requiredTables.has("datasets") || !requiredTables.has("records")) {
-    db.close();
-    throw new Error(`O arquivo em ${databasePath} não contém as tabelas datasets e records esperadas.`);
-  }
-  const datasetCount = db.prepare("SELECT COUNT(*) AS count FROM datasets").get().count;
-  const recordCount = db.prepare("SELECT COUNT(*) AS count FROM records").get().count;
-  if (datasetCount === 0 || recordCount === 0) {
-    db.close();
-    throw new Error(`O banco em ${databasePath} não contém conjuntos e registros. Inicialização interrompida para evitar servir um banco vazio.`);
-  }
-  console.log(`Banco SQLite carregado: ${databasePath}`);
-}
 
 const uploadDirectory = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, "uploads"));
 function assertWritableDirectory(directory) {
@@ -123,15 +103,6 @@ function prepareUploadDirectory(directory) {
   }
 }
 
-if (setupMode) {
-  console.log(`UPLOAD_DIR não será criado nem validado durante a preparação: ${uploadDirectory}`);
-} else {
-  try {
-    prepareUploadDirectory(uploadDirectory);
-  } catch (error) {
-    throw new Error(`UPLOAD_DIR inválido (${uploadDirectory}): ${error.message}. Verifique a montagem e as permissões do armazenamento persistente.`);
-  }
-}
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, callback) => {
@@ -161,12 +132,28 @@ function requireDatabase(_req, res, next) {
   next();
 }
 
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function jsonSafe(value) {
+  if (typeof value === "bigint") {
+    const number = Number(value);
+    return Number.isSafeInteger(number) ? number : value.toString();
+  }
+  if (Array.isArray(value)) return value.map(jsonSafe);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonSafe(entry)]));
+  }
+  return value;
+}
+
 function norm(v) {
   return String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, " ");
 }
 function forbiddenKey(k) {
   const n = norm(k).replace(/[^a-z0-9]/g, "");
-  return /^(cns|cartaosus|matricula|matriculafuncional)$/.test(n);
+  return /^(cns|cartaosus|cpf|matricula|matriculafuncional|nome|nomecompleto|nomedoprofissional|telefone|celular|email|datanascimento|nascimento)$/.test(n);
 }
 function safeRow(row) {
   const out = {};
@@ -272,26 +259,39 @@ function inferPeriod(category, source, filename, sheets) {
   return "Período não informado no arquivo";
 }
 
-function importDataset(file, originalName, category, source, period) {
+async function importDataset(file, originalName, category, source, period) {
   const sheets = parseFile(file, originalName, category, period);
   const resolvedPeriod = period || inferPeriod(category, source, originalName, sheets);
-  const insertDataset = db.prepare("INSERT INTO datasets(category,source,filename,sheet_name,reference_period,row_count) VALUES(?,?,?,?,?,?)");
-  const insertRecord = db.prepare("INSERT INTO records(dataset_id,row_data) VALUES(?,?)");
-  const tx = db.transaction(() => {
+  const tx = await db.transaction("write");
+  try {
     for (const s of sheets) {
-      const info = insertDataset.run(category, source, originalName, s.sheet, resolvedPeriod, s.rows.length);
-      for (const row of s.rows) insertRecord.run(info.lastInsertRowid, JSON.stringify(row));
+      const info = await tx.execute({
+        sql: "INSERT INTO datasets(category,source,filename,sheet_name,reference_period,row_count) VALUES(?,?,?,?,?,?)",
+        args: [category, source, originalName, s.sheet, resolvedPeriod, s.rows.length]
+      });
+      if (info.lastInsertRowid === undefined) throw new Error("O banco não retornou o ID do conjunto importado.");
+      const statements = s.rows.map(row => ({
+        sql: "INSERT INTO records(dataset_id,row_data) VALUES(?,?)",
+        args: [info.lastInsertRowid, JSON.stringify(row)]
+      }));
+      for (let offset = 0; offset < statements.length; offset += 250) {
+        await tx.batch(statements.slice(offset, offset + 250));
+      }
     }
-  });
-  tx();
+    await tx.commit();
+  } catch (error) {
+    try { await tx.rollback(); } catch (_) {}
+    throw error;
+  }
   return { sheets: sheets.length, rows: sheets.reduce((n, s) => n + s.rows.length, 0) };
 }
 
-app.get("/api/datasets", requireDatabase, (_req, res) => {
-  res.json(db.prepare("SELECT id,category,source,filename,sheet_name,reference_period,extracted_at,row_count FROM datasets ORDER BY id DESC").all());
-});
+app.get("/api/datasets", requireDatabase, asyncRoute(async (_req, res) => {
+  const result = await db.execute("SELECT id,category,source,filename,sheet_name,reference_period,extracted_at,row_count FROM datasets ORDER BY id DESC");
+  res.json(jsonSafe(result.rows));
+}));
 
-app.get("/api/search", requireDatabase, (req, res) => {
+app.get("/api/search", requireDatabase, asyncRoute(async (req, res) => {
   const datasetId = Number(req.query.datasetId || 0);
   const q = norm(req.query.q || "");
   const mode = req.query.mode === "any" ? "any" : "all";
@@ -302,21 +302,22 @@ app.get("/api/search", requireDatabase, (req, res) => {
   let sql = `SELECT r.id,r.row_data,d.category,d.source,d.filename,d.sheet_name,d.reference_period FROM records r JOIN datasets d ON d.id=r.dataset_id WHERE 1=1`;
   const params = [];
   if (datasetId) { sql += " AND d.id=?"; params.push(datasetId); }
-  const rows = db.prepare(sql + " LIMIT 5000").all(...params);
+  const result = await db.execute({ sql: sql + " ORDER BY r.id LIMIT 5000", args: params });
+  const rows = result.rows;
   const matched = rows.filter(rec => {
-    const data = JSON.parse(rec.row_data);
+    const data = safeRow(JSON.parse(rec.row_data));
     const entries = Object.entries(data).filter(([k]) => !forbiddenKey(k));
     const textOk = !q || entries.some(([k, v]) => norm(k).includes(q) || norm(v).includes(q));
     const checks = filters.map(([field, value]) => entries.some(([k, v]) => norm(k) === norm(field) && norm(v).includes(value)));
     const filterOk = !checks.length || (mode === "any" ? checks.some(Boolean) : checks.every(Boolean));
     return textOk && filterOk;
   });
-  res.json(matched.slice(0, 200).map(rec => ({ id: rec.id, ...JSON.parse(rec.row_data), _categoria: rec.category, _fonte: rec.source, _arquivo: rec.filename, _aba: rec.sheet_name, _periodo: rec.reference_period })));
-});
+  res.json(jsonSafe(matched.slice(0, 200).map(rec => ({ id: rec.id, ...safeRow(JSON.parse(rec.row_data)), _categoria: rec.category, _fonte: rec.source, _arquivo: rec.filename, _aba: rec.sheet_name, _periodo: rec.reference_period }))));
+}));
 
-app.get("/api/dashboard", requireDatabase, (_req, res) => {
-  const all = db.prepare(`SELECT d.category,d.source,d.filename,d.sheet_name,d.reference_period,r.row_data FROM records r JOIN datasets d ON d.id=r.dataset_id`).all();
-  const rows = all.map(x => ({ ...x, data: JSON.parse(x.row_data) }));
+app.get("/api/dashboard", requireDatabase, asyncRoute(async (_req, res) => {
+  const result = await db.execute("SELECT d.category,d.source,d.filename,d.sheet_name,d.reference_period,r.row_data FROM records r JOIN datasets d ON d.id=r.dataset_id ORDER BY r.id");
+  const rows = result.rows.map(x => ({ ...x, data: safeRow(JSON.parse(x.row_data)) }));
   const findCategory = prefix => rows.filter(r => r.category.includes(prefix));
   const cnes = findCategory("Estabelecimentos");
   const sisab = findCategory("Produção da Atenção Primária");
@@ -332,7 +333,7 @@ app.get("/api/dashboard", requireDatabase, (_req, res) => {
     ? [...professionalRows.reduce((m,r)=>{if(r.CBO)m.set(r.CBO,(m.get(r.CBO)||0)+1);return m},new Map())].map(([cbo,count])=>({cbo,count}))
     : [];
   const statusCounts = [...professionalRows.reduce((m,r)=>{const status=String(r["Status do envio de produção"]||"").trim();if(status)m.set(status,(m.get(status)||0)+1);return m},new Map())].map(([status,count])=>({status,count}));
-  res.json({
+  res.json(jsonSafe({
     counts: { establishments: cnes.length, sisab: sisab.length, sia: sia.length, aps: aps.length, acs: acs.length, monitor: monitor.length, professionals: professionalCount },
     acsSeries: acs.map(r => ({ competence: r.data["Comp. CNES"] || "", coverage: r.data["Cobertura ACS"] || "" })).filter(x => x.competence),
     apsSeries: aps.map(r => ({ competence: r.data["Comp. CNES"] || "", capacity: r.data["Qt. capacidade da equipe"] || "" })).filter(x => x.competence),
@@ -342,14 +343,85 @@ app.get("/api/dashboard", requireDatabase, (_req, res) => {
     professionals: professionalRows,
     cboCounts,
     statusCounts
-  });
-});
+  }));
+}));
 
 function createImportBackupPath() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const directory = path.dirname(databasePath);
-  const basename = path.basename(databasePath, path.extname(databasePath));
-  return path.join(directory, `${basename}.before-import-${timestamp}.sqlite`);
+  const directory = path.resolve(process.env.IMPORT_BACKUP_DIR || path.join(os.tmpdir(), "susmais-backups"));
+  return path.join(directory, `susmais.before-import-${timestamp}.sqlite`);
+}
+
+async function exportRemoteBackup(backupPath) {
+  const readTransaction = await db.transaction("read");
+  let datasets;
+  let records;
+  let sequences;
+  try {
+    datasets = (await readTransaction.execute("SELECT id,category,source,filename,sheet_name,reference_period,extracted_at,row_count,imported_once FROM datasets ORDER BY id")).rows;
+    records = (await readTransaction.execute("SELECT id,dataset_id,row_data FROM records ORDER BY id")).rows;
+    sequences = (await readTransaction.execute("SELECT name,seq FROM sqlite_sequence ORDER BY name")).rows;
+    await readTransaction.commit();
+  } catch (error) {
+    try { await readTransaction.rollback(); } catch (_) {}
+    throw error;
+  }
+
+  const backup = new Database(backupPath);
+  try {
+    backup.exec(`
+      CREATE TABLE datasets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        source TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        sheet_name TEXT,
+        reference_period TEXT,
+        extracted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        row_count INTEGER DEFAULT 0,
+        imported_once INTEGER DEFAULT 0
+      );
+      CREATE TABLE records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+        row_data TEXT NOT NULL
+      );
+      CREATE INDEX idx_records_dataset ON records(dataset_id);
+    `);
+    const insertDataset = backup.prepare("INSERT INTO datasets(id,category,source,filename,sheet_name,reference_period,extracted_at,row_count,imported_once) VALUES(?,?,?,?,?,?,?,?,?)");
+    const insertRecord = backup.prepare("INSERT INTO records(id,dataset_id,row_data) VALUES(?,?,?)");
+    const copy = backup.transaction(() => {
+      for (const row of datasets) {
+        insertDataset.run(Number(row.id), row.category, row.source, row.filename, row.sheet_name, row.reference_period, row.extracted_at, Number(row.row_count), Number(row.imported_once || 0));
+      }
+      for (const row of records) insertRecord.run(Number(row.id), Number(row.dataset_id), row.row_data);
+      const updateSequence = backup.prepare("UPDATE sqlite_sequence SET seq=? WHERE name=?");
+      const insertSequence = backup.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)");
+      for (const row of sequences) {
+        const result = updateSequence.run(Number(row.seq), row.name);
+        if (!result.changes) insertSequence.run(row.name, Number(row.seq));
+      }
+    });
+    copy();
+  } finally {
+    backup.close();
+    try { fs.chmodSync(backupPath, 0o600); } catch (_) {}
+  }
+}
+
+async function createImportBackup() {
+  const backupPath = createImportBackupPath();
+  const directory = path.dirname(backupPath);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (databaseBackend === "sqlite") {
+    const source = new Database(databasePath, { fileMustExist: true, readonly: true });
+    try { await source.backup(backupPath); }
+    finally { source.close(); }
+    fs.chmodSync(backupPath, 0o600);
+  } else {
+    await exportRemoteBackup(backupPath);
+  }
+  return backupPath;
 }
 
 app.post("/api/import", (req, res, next) => {
@@ -363,34 +435,41 @@ app.post("/api/import", (req, res, next) => {
     return res.status(401).json({ error: "Token administrativo inválido." });
   }
   next();
-}, upload.single("file"), async (req, res) => {
+}, upload.single("file"), asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Selecione um arquivo." });
   try {
-    if (!req.file) return res.status(400).json({ error: "Selecione um arquivo." });
-    const backupPath = createImportBackupPath();
-    await db.backup(backupPath);
-    console.log(`Backup de segurança criado antes da importação: ${backupPath}`);
-    const result = importDataset(req.file.path, req.file.originalname, String(req.body.category || "Não categorizado"), String(req.body.source || "Fonte não informada"), String(req.body.period || ""));
+    const backupPath = await createImportBackup();
+    console.log(`Backup anterior à importação criado em armazenamento local: ${backupPath}`);
+    const result = await importDataset(req.file.path, req.file.originalname, String(req.body.category || "Não categorizado"), String(req.body.source || "Fonte não informada"), String(req.body.period || ""));
     fs.unlinkSync(req.file.path);
     res.json({ message: "Importação concluída.", ...result });
   } catch (error) {
-    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
-    res.status(400).json({ error: error.message });
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    const safeMessage = error.message && /formato|cabeçalho|selecione|não foi encontrado/i.test(error.message)
+      ? error.message
+      : "Não foi possível concluir a importação. Nenhuma alteração parcial foi mantida.";
+    res.status(400).json({ error: safeMessage });
   }
-});
+}));
 
 app.get("/api/health", (_req, res) => {
   if (setupMode || !db) {
     return res.json({ status: "setup", setup: true, database: "not_loaded", message: setupMessage });
   }
-  res.json({ status: "ok", setup: false, database: "SQLite" });
+  res.json({ status: "ok", setup: false, database: databaseBackend });
 });
-app.get("/api/citizen/units", requireDatabase, (req, res) => {
+app.get("/api/citizen/units", requireDatabase, asyncRoute(async (req, res) => {
   const district = norm(req.query.district || "");
   const unitType = norm(req.query.type || "");
   const service = norm(req.query.service || "");
-  const dataset = db.prepare("SELECT id FROM datasets WHERE category=? AND filename=? ORDER BY id DESC LIMIT 1").get("Estabelecimentos de saúde", "estabelecimentos-310620.csv");
+  const datasetResult = await db.execute({
+    sql: "SELECT id FROM datasets WHERE category=? AND filename=? ORDER BY id DESC LIMIT 1",
+    args: ["Estabelecimentos de saúde", "estabelecimentos-310620.csv"]
+  });
+  const dataset = datasetResult.rows[0];
   if (!dataset) return res.json({ districts: [], types: [], services: [], units: [] });
-  const rows = db.prepare("SELECT row_data FROM records WHERE dataset_id=?").all(dataset.id).map(x => JSON.parse(x.row_data));
+  const records = await db.execute({ sql: "SELECT row_data FROM records WHERE dataset_id=? ORDER BY id", args: [dataset.id] });
+  const rows = records.rows.map(x => safeRow(JSON.parse(x.row_data)));
   const districts = [...new Set(rows.map(r => String(r.BAIRRO || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
 
   const patterns = {
@@ -444,7 +523,51 @@ app.get("/api/citizen/units", requireDatabase, (req, res) => {
   const services = ["Odontologia", "Farmácia"]
     .map(label => ({ label, count: units.filter(u => u.namedServices.includes(label)).length }))
     .filter(item => item.count > 0);
-  res.json({ districts, types, services, units, warning: "Os tipos e serviços são identificados por termos presentes no cadastro nominal. Isso não confirma todos os serviços efetivamente oferecidos pela unidade." });
+  res.json(jsonSafe({ districts, types, services, units, warning: "Os tipos e serviços são identificados por termos presentes no cadastro nominal. Isso não confirma todos os serviços efetivamente oferecidos pela unidade." }));
+}));
+
+app.use((error, _req, res, _next) => {
+  if (res.headersSent) return;
+  if (error instanceof multer.MulterError) {
+    const status = error.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    return res.status(status).json({ error: status === 413 ? "O arquivo excede o limite de 30 MiB." : "Não foi possível receber o arquivo enviado." });
+  }
+  const code = error && error.code ? String(error.code) : "unknown";
+  console.error(`Falha ao atender solicitação (${code}).`);
+  res.status(500).json({ error: "Falha interna ao consultar o sistema." });
 });
-const port = process.env.PORT || 3000;
-app.listen(port, "0.0.0.0", () => console.log(`SUS+ disponível na porta ${port} (0.0.0.0)`));
+
+async function startServer({ port = process.env.PORT || 3000, host = "0.0.0.0" } = {}) {
+  if (setupMode) {
+    console.log(`SUS+ em modo de preparação. ${setupMessage}`);
+    console.log(`UPLOAD_DIR não será criado nem validado durante a preparação: ${uploadDirectory}`);
+  } else {
+    const opened = await openConfiguredDatabase({ setupMode, env: process.env });
+    db = opened.client;
+    databaseBackend = opened.backend;
+    console.log(`Banco ${databaseBackend} carregado (${opened.counts.datasetCount} conjuntos, ${opened.counts.recordCount} registros).`);
+    try {
+      prepareUploadDirectory(uploadDirectory);
+    } catch (error) {
+      db.close();
+      db = null;
+      throw new Error(`UPLOAD_DIR inválido (${uploadDirectory}): ${error.message}. Verifique a montagem e as permissões do armazenamento.`);
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, host, () => {
+      console.log(`SUS+ disponível na porta ${server.address().port} (${host})`);
+      resolve(server);
+    });
+    server.once("error", reject);
+  });
+}
+
+if (require.main === module) {
+  startServer().catch(error => {
+    console.error(`Inicialização interrompida: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { app, startServer };

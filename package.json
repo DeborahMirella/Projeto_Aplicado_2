@@ -4,9 +4,13 @@
   "private": true,
   "description": "Protótipo acadêmico SUS+ para importação e recuperação de dados públicos",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "migrate:turso": "node scripts/migrate-sqlite-to-turso.js",
+    "verify:turso": "node scripts/verify-turso-migration.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "better-sqlite3": "^11.5.0",
     "csv-parse": "^5.6.0",
     "express": "^4.21.2",

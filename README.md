@@ -39,25 +39,60 @@ Requer Node.js 18 ou superior.
 3. Configure `ADMIN_TOKEN` e inicie com `npm start`.
 4. Acesse `http://localhost:3000`.
 
-O banco local padrão é `susmais.sqlite` nesta pasta. `SUSMAIS_DB_PATH` pode apontar para outro arquivo SQLite existente. A aplicação interrompe a inicialização se o arquivo não existir, estiver sem dados ou não tiver as tabelas esperadas; ela não cria nem semeia automaticamente um banco vazio.
+O backend local padrão usa `@libsql/client` sobre o arquivo SQLite existente `susmais.sqlite`. `DB_BACKEND=sqlite` e `SUSMAIS_DB_PATH` selecionam o arquivo local. A aplicação interrompe a inicialização se o arquivo não existir, estiver vazio ou não tiver o esquema esperado; não cria um banco vazio.
 
-`SUSMAIS_SETUP_MODE=true` permite iniciar a interface antes de o arquivo SQLite ser transferido. A página mostra o estado de preparação, as APIs de dados e a importação retornam HTTP 503 e nenhum banco é aberto ou criado. Desative com `SUSMAIS_SETUP_MODE=false` após copiar um banco válido para `SUSMAIS_DB_PATH`; fora do modo de preparação, arquivo ausente, inválido ou vazio continua impedindo a inicialização.
+`DB_BACKEND=turso` seleciona o banco remoto e exige `TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN`. A inicialização valida tabelas, metadados e contagens; credenciais ausentes, schema incompatível ou banco vazio impedem a aplicação de servir as rotas de dados. `SUSMAIS_SETUP_MODE=true` continua permitindo iniciar apenas a interface de preparação, sem conectar ou validar o banco; nesse modo as APIs dependentes de dados retornam HTTP 503.
 
-`UPLOAD_DIR` define onde os arquivos enviados são armazenados temporariamente. Por padrão, usa `uploads/` nesta pasta. Fora do modo de preparação, o servidor verifica a disponibilidade e a gravação no diretório pai antes de criar apenas a pasta final; não cria diretórios pais. Em modo de preparação, não verifica nem cria `UPLOAD_DIR`. Os arquivos temporários são removidos depois da importação.
+`UPLOAD_DIR` define onde os arquivos enviados são armazenados temporariamente. Os arquivos são removidos após a importação. Em modo de preparação, o servidor não acessa esse caminho.
 
-Importações administrativas exigem `ADMIN_TOKEN` em qualquer ambiente. Sem a variável, a rota `/api/import` fica desativada; não há token padrão. Antes de uma importação, o servidor cria um backup do SQLite ao lado do banco. Garanta espaço e permissão de escrita nesse diretório.
+Importações administrativas exigem `ADMIN_TOKEN` em qualquer ambiente e são transacionais. Antes de cada importação é criado um backup local protegido por permissões de arquivo. `IMPORT_BACKUP_DIR` pode definir a pasta; por padrão é usada uma pasta temporária do sistema.
 
 ### Render
 
 - Root Directory: raiz do repositório conectado.
 - Build Command: `npm ci`.
 - Start Command: `npm start`.
-- Configure `SUSMAIS_DB_PATH` para o caminho do banco disponibilizado no serviço, `UPLOAD_DIR` para uma pasta gravável e persistente se os uploads precisarem sobreviver a reinicializações, e `ADMIN_TOKEN` como segredo.
-- Monte um disco persistente em `/var/data` e use `SUSMAIS_DB_PATH=/var/data/susmais.sqlite` e `UPLOAD_DIR=/var/data/uploads`.
-- Faça primeiro o deploy com `SUSMAIS_SETUP_MODE=true`; a página e o health check sobem sem abrir ou criar um banco.
-- Copie o banco local atual por canal privado para `/var/data/susmais.sqlite`. O Render documenta SCP/SFTP para serviços com SSH; o disco não está disponível nos comandos de build ou pre-deploy.
-- Após a transferência, defina `SUSMAIS_SETUP_MODE=false` e reinicie/reimplante o serviço. O servidor valida tabelas e conteúdo antes de servir dados.
-- O sistema de arquivos do serviço pode ser efêmero. Use o disco persistente do Render para o SQLite e backups; sem esse armazenamento, alterações podem ser perdidas em reinicializações e novos deploys.
+- Configure `DB_BACKEND=turso`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` e `ADMIN_TOKEN` no painel do Render. Não coloque tokens no repositório.
+- Para o primeiro início sem banco configurado, use `SUSMAIS_SETUP_MODE=true`; após criar o destino e migrar os dados, desative a variável e reinicie.
+- O plano gratuito do Render tem sistema de arquivos efêmero. Backups exportados para `IMPORT_BACKUP_DIR` no serviço não sobrevivem a reinicializações; mantenha cópias em armazenamento privado durável.
+
+### Turso: criar, migrar e validar
+
+Instale o CLI Turso, autentique e crie uma base libSQL vazia. Não use `--from-file` junto com a rotina abaixo: a rotina cria o esquema e verifica os dados por conta própria.
+
+```sh
+turso auth login
+turso db create susmais
+turso db show susmais
+turso db tokens create susmais
+```
+
+Configure `DB_BACKEND=turso`, `TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN` localmente sem salvar o token no Git. Faça uma cópia privada do SQLite original e migre essa cópia:
+
+```sh
+DB_BACKEND=turso TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' \
+  npm run migrate:turso -- /caminho/privado/susmais.sqlite
+```
+
+A rotina lê a origem em modo somente leitura, exige 9 conjuntos e 7.759 registros, preserva IDs e metadados, insere em uma transação e compara hashes. Se for executada novamente, só aceita um destino vazio ou uma cópia já idêntica; destinos parciais ou divergentes são recusados.
+
+Para comparar o banco e as APIs, inicie duas instâncias em terminais separados, uma com a origem SQLite e outra com o destino Turso:
+
+```sh
+DB_BACKEND=sqlite SUSMAIS_DB_PATH=/caminho/privado/susmais.sqlite PORT=3000 npm start
+DB_BACKEND=turso TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' PORT=3001 npm start
+```
+
+Em outro terminal, rode:
+
+```sh
+SUSMAIS_DB_PATH=/caminho/privado/susmais.sqlite \
+TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' \
+LOCAL_API_URL=http://127.0.0.1:3000 REMOTE_API_URL=http://127.0.0.1:3001 \
+  npm run verify:turso
+```
+
+O verificador compara contagens, IDs, relações, hashes, integridade e respostas de `/api/datasets`, `/api/search`, `/api/dashboard` e `/api/citizen/units`. Os arquivos originais em `Base de Dados/` não são reimportados.
 
 ### Arquivos-fonte usados para reconstruir os dados
 

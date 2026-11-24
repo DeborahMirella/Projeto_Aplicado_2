@@ -169,7 +169,7 @@ async function initializeService(){
    notice.querySelector("span").textContent=health.message;
    notice.hidden=false;
    document.body.classList.add("setup-mode");
-   document.querySelectorAll('[data-view="citizen"],[data-view="manager"],[data-citizen-action],#toggle-search,#search,#import').forEach(button=>{button.disabled=true;button.title="Disponível após a instalação do banco SQLite."});
+   document.querySelectorAll('[data-view="citizen"],[data-view="manager"],[data-citizen-action],#toggle-search,#search,#import').forEach(button=>{button.disabled=true;button.title="Disponível após a configuração do banco de dados."});
    return;
   }
  }catch(_){ }
